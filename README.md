@@ -41,7 +41,7 @@ flowchart LR
 To run the simulations and analysis scripts, ensure you have the following dependencies installed:
 
 ### Network Simulator
-* **ns-3** (v3.45)
+* [**ns-3** (v3.45)](https://www.nsnam.org/)
 * C++17 compiler (GCC or Clang)
 * CMake
 
@@ -75,7 +75,7 @@ The analytical scripts automatically output several types of plots into the char
 
 ## Author
 
-Paweł Wityk - Main Developer / Maintainer - github.com/pawelwityk
+Paweł Wityk - Main Developer / Maintainer - [github.com/pawelwityk](https://github.com/pawelwityk)
 
 ## License
 
