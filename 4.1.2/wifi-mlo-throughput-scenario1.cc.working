@@ -1,0 +1,260 @@
+/* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
+
+#include "ns3/core-module.h"
+#include "ns3/network-module.h"
+#include "ns3/internet-module.h"
+#include "ns3/wifi-module.h"
+#include "ns3/mobility-module.h"
+#include "ns3/applications-module.h"
+#include "ns3/flow-monitor-module.h"
+#include "ns3/spectrum-wifi-helper.h"
+#include "ns3/multi-model-spectrum-channel.h"
+
+#include <iostream>
+#include <vector>
+#include <string>
+#include <cstdint>
+#include <cmath>
+
+using namespace ns3;
+
+NS_LOG_COMPONENT_DEFINE("WifiMloThroughputScenario1");
+
+// Sumaryczny throughput ze wszystkich flowów (Mb/s)
+static double
+GetFlowThroughputMbps(Ptr<FlowMonitor> flowmon)
+{
+  double totalThroughput = 0.0;
+
+  auto stats = flowmon->GetFlowStats();
+  for (auto const &p : stats)
+    {
+      const FlowMonitor::FlowStats &st = p.second;
+      if (st.rxPackets == 0)
+        {
+          continue;
+        }
+
+      double tFirst = st.timeFirstRxPacket.GetSeconds();
+      double tLast  = st.timeLastRxPacket.GetSeconds();
+      double duration = tLast - tFirst;
+      if (duration <= 0.0)
+        {
+          continue;
+        }
+
+      double thr = (st.rxBytes * 8.0) / (duration * 1e6); // Mb/s
+      totalThroughput += thr;
+    }
+
+  return totalThroughput;
+}
+
+int
+main(int argc, char *argv[])
+{
+  uint32_t nAp   = 1;
+  uint32_t nSta  = 1;
+  double   simTime = 30.0;       // [s]
+  uint32_t payloadSize = 1500;   // [B]
+  uint32_t nMpdus = 1024;        // tylko informacyjnie
+  uint32_t numLinks = 1;         // 1, 2 lub 3
+  std::string mloMode = "SLO";   // SLO, STR, EMLSR
+
+  CommandLine cmd(__FILE__);
+  cmd.AddValue("simTime", "Simulation time [s]", simTime);
+  cmd.AddValue("payloadSize", "UDP payload size [B]", payloadSize);
+  cmd.AddValue("nMpdus", "Number of aggregated MPDUs (not enforced here)", nMpdus);
+  cmd.AddValue("numLinks", "Number of links (1, 2, or 3)", numLinks);
+  cmd.AddValue("mloMode", "MLO mode: SLO, STR, or EMLSR", mloMode);
+  cmd.Parse(argc, argv);
+
+  if (numLinks < 1 || numLinks > 3)
+    {
+      NS_ABORT_MSG("numLinks must be 1, 2, or 3");
+    }
+  if (mloMode == "SLO" && numLinks != 1)
+    {
+      NS_LOG_UNCOND("SLO -> numLinks nadpisane na 1");
+      numLinks = 1;
+    }
+
+  std::cout << "Throughput Scenario #1\n";
+  std::cout << "Mode      : " << mloMode << "\n";
+  std::cout << "Num links : " << numLinks << "\n";
+
+  RngSeedManager::SetSeed(1);
+
+  // Węzły
+  NodeContainer apNodes;
+  apNodes.Create(nAp);
+  NodeContainer staNodes;
+  staNodes.Create(nSta);
+
+  // Kanały 5 GHz dla linków
+  std::vector< Ptr<MultiModelSpectrumChannel> > spectrumChannels(numLinks);
+
+  for (uint32_t i = 0; i < numLinks; ++i)
+    {
+      spectrumChannels[i] = CreateObject<MultiModelSpectrumChannel>();
+
+      Ptr<LogDistancePropagationLossModel> loss = CreateObject<LogDistancePropagationLossModel>();
+      loss->SetPathLossExponent(3.0);
+      //Ptr<NakagamiPropagationLossModel> fading = CreateObject<NakagamiPropagationLossModel>();
+      //fading->SetAttribute("m0", DoubleValue(1.0));
+      //fading->SetAttribute("m1", DoubleValue(1.0));
+      //fading->SetAttribute("m2", DoubleValue(1.0));
+      //loss->SetNext(fading);
+      //spectrumChannels[i]->AddPropagationLossModel(loss);
+      //spectrumChannels[i]->SetPropagationDelayModel(CreateObject<ConstantSpeedPropagationDelayModel>());
+      spectrumChannels[i]->AddPropagationLossModel(loss); 
+    }
+
+  // PHY: numLinks linków
+  SpectrumWifiPhyHelper phy(numLinks);
+  phy.SetPcapDataLinkType(WifiPhyHelper::DLT_IEEE802_11_RADIO);
+  phy.SetPcapCaptureType(WifiPhyHelper::PcapCaptureType::PCAP_PER_LINK);
+  phy.SetErrorRateModel("ns3::NistErrorRateModel");
+  // UWAGA: ChannelWidth ustawiamy przez ChannelSettings, więc NIE robimy phy.Set("ChannelWidth", ...)
+
+  for (uint32_t i = 0; i < numLinks; ++i)
+    {
+      phy.AddChannel(spectrumChannels[i], WIFI_SPECTRUM_5_GHZ);
+    }
+
+  // Kanały 80 MHz (5 GHz), 3 różne numery – używamy pierwszych numLinks
+  uint32_t chanNums[3] = {42, 58, 106};
+
+  for (uint32_t i = 0; i < numLinks; ++i)
+    {
+      std::ostringstream oss;
+      // { channelNumber, channelWidthMHz=80, band, primary20Index=0 }
+      oss << "{" << chanNums[i] << ", 80, BAND_5GHZ, 0}";
+      phy.Set(i, "ChannelSettings", StringValue(oss.str()));
+      phy.Set(i, "Antennas", UintegerValue(2));
+      phy.Set(i, "MaxSupportedTxSpatialStreams", UintegerValue(2));
+      phy.Set(i, "MaxSupportedRxSpatialStreams", UintegerValue(2));
+    }
+
+  // Wspieramy EMLSR (opóźnienie przełączania)
+  phy.Set("ChannelSwitchDelay", TimeValue(MicroSeconds(100)));
+
+  // Wi-Fi 7
+  WifiHelper wifi;
+  wifi.SetStandard(WIFI_STANDARD_80211be);
+
+  // GI = 3.2 us
+  wifi.ConfigHeOptions("GuardInterval", TimeValue(NanoSeconds(800)));
+
+  // MCS 8 na wszystkich linkach
+  for (uint32_t i = 0; i < numLinks; ++i)
+    {
+      wifi.SetRemoteStationManager(i,
+                                   "ns3::ConstantRateWifiManager",
+                                   "DataMode", StringValue("EhtMcs8"),
+                                   "ControlMode", StringValue("EhtMcs8"));
+    }
+
+  // EMLSR – tylko jeśli mloMode == EMLSR i mamy >1 link
+  if (mloMode == "EMLSR" && numLinks > 1)
+    {
+      wifi.ConfigEhtOptions("EmlsrActivated", BooleanValue(true));
+      wifi.ConfigEhtOptions("TransitionTimeout", TimeValue(MicroSeconds(1024)));
+      wifi.ConfigEhtOptions("MediumSyncDuration", TimeValue(MicroSeconds(3200)));
+      wifi.ConfigEhtOptions("MsdOfdmEdThreshold", IntegerValue(-72));
+      wifi.ConfigEhtOptions("MsdMaxNTxops", UintegerValue(0)); // bez limitu
+    }
+
+  WifiMacHelper wifiMac;
+  wifiMac.SetMultiUserScheduler("ns3::RrMultiUserScheduler",
+                                "EnableUlOfdma", BooleanValue(false),
+                                "EnableBsrp", BooleanValue(false));
+
+  Ssid ssid = Ssid("wifi-mlo-thr1");
+
+  // AP
+  wifiMac.SetType("ns3::ApWifiMac",
+                  "Ssid", SsidValue(ssid),
+                  "QosSupported", BooleanValue(true));
+  NetDeviceContainer apDevices = wifi.Install(phy, wifiMac, apNodes);
+
+  // STA (EMLSR Manager tylko w trybie EMLSR i przy >1 linku)
+  if (mloMode == "EMLSR" && numLinks > 1)
+    {
+      std::string linkSet;
+      if (numLinks == 2)
+        {
+          linkSet = "0,1";
+        }
+      else // numLinks == 3
+        {
+          linkSet = "0,1,2";
+        }
+
+      wifiMac.SetEmlsrManager("ns3::DefaultEmlsrManager",
+                              "EmlsrLinkSet", StringValue(linkSet),
+                              "MainPhyId", UintegerValue(1),
+                              "EmlsrPaddingDelay", TimeValue(MicroSeconds(32)),
+                              "EmlsrTransitionDelay", TimeValue(MicroSeconds(128)),
+                              "SwitchAuxPhy", BooleanValue(false),
+                              "AuxPhyChannelWidth", UintegerValue(80));
+    }
+
+  wifiMac.SetType("ns3::StaWifiMac",
+                  "Ssid", SsidValue(ssid),
+                  "QosSupported", BooleanValue(true),
+                  "ActiveProbing", BooleanValue(false));
+  NetDeviceContainer staDevices = wifi.Install(phy, wifiMac, staNodes);
+
+  // Mobilność: AP (0,0,0), STA (5,0,0) – odległość 5 m
+  MobilityHelper mobility;
+  Ptr<ListPositionAllocator> pos = CreateObject<ListPositionAllocator>();
+  pos->Add(Vector(0.0, 0.0, 0.0)); // AP
+  pos->Add(Vector(1.0, 0.0, 0.0)); // STA
+  mobility.SetPositionAllocator(pos);
+  mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
+  mobility.Install(apNodes);
+  mobility.Install(staNodes);
+
+  // Internet + IP
+  InternetStackHelper stack;
+  stack.Install(apNodes);
+  stack.Install(staNodes);
+
+  Ipv4AddressHelper address;
+  address.SetBase("10.1.0.0", "255.255.255.0");
+  Ipv4InterfaceContainer apIf  = address.Assign(apDevices);
+  Ipv4InterfaceContainer staIf = address.Assign(staDevices);
+
+  Ipv4GlobalRoutingHelper::PopulateRoutingTables();
+
+  // Aplikacje: full-buffer DOWNLINK (AP -> STA)
+  uint16_t port = 5000;
+
+  UdpServerHelper server(port);
+  ApplicationContainer serverApp = server.Install(staNodes.Get(0));
+  serverApp.Start(Seconds(0.0));
+  serverApp.Stop(Seconds(simTime + 1.0));
+
+  UdpClientHelper client(staIf.GetAddress(0), port);
+  client.SetAttribute("MaxPackets", UintegerValue(0xFFFFFFFF));
+  client.SetAttribute("Interval", TimeValue(Seconds(1e-6)));
+  client.SetAttribute("PacketSize", UintegerValue(payloadSize));
+
+  ApplicationContainer clientApp = client.Install(apNodes.Get(0));
+  clientApp.Start(Seconds(0.1));
+  clientApp.Stop(Seconds(simTime + 1.0));
+
+  // FlowMonitor
+  FlowMonitorHelper fmHelper;
+  Ptr<FlowMonitor> flowmon = fmHelper.InstallAll();
+
+  Simulator::Stop(Seconds(simTime + 1.0));
+  Simulator::Run();
+
+  double thr = GetFlowThroughputMbps(flowmon);
+  std::cout << "Average throughput: " << thr << " Mb/s" << std::endl;
+
+  Simulator::Destroy();
+  return 0;
+}

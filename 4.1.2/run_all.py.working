@@ -1,0 +1,181 @@
+import subprocess
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+import csv
+import re
+
+# ===== KONFIG =====
+
+# ŚCIEŻKA DO BINARKI (po: ./ns3 build scratch/4.1.2/wifi-mlo-throughput-scenario1.cc)
+NS3_BIN = "build/scratch/4.1.2/ns3.45-wifi-mlo-throughput-scenario1-default"
+
+RUNS = 10
+SIMTIME = 30.0
+PAYLOAD = 1500
+N_MPDUS = 1024
+RNG_START = 1001
+
+OUTPUT_DIR = "thr_runs_all"
+SUMMARY_CSV = "throughput_summary_all.csv"
+PLOT_FILE = "throughput_summary_bars.png"
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# (etykieta, mloMode, numLinks)
+CONFIGS = [
+    ("SL 1 link",      "SLO",   1),
+    ("EMLSR 2 links",  "EMLSR", 2),
+    ("STR 2 links",    "STR",   2),
+    ("EMLSR 3 links",  "EMLSR", 3),
+    ("STR 3 links",    "STR",   3),
+]
+
+def run_one_simulation(cfg_label, mlo_mode, num_links, rng_run):
+    cmd = [
+        NS3_BIN,
+        f"--RngRun={rng_run}",
+        f"--simTime={SIMTIME}",
+        f"--payloadSize={PAYLOAD}",
+        f"--nMpdus={N_MPDUS}",
+        f"--numLinks={num_links}",
+        f"--mloMode={mlo_mode}",
+    ]
+
+    print(f"[{cfg_label}] RUN {rng_run}  Starting...")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    stdout = result.stdout
+    stderr = result.stderr
+
+    if result.returncode != 0:
+        safe_label = cfg_label.replace(" ", "_")
+        log_path = os.path.join(OUTPUT_DIR, f"{safe_label}_rng{rng_run}_stderr.txt")
+        with open(log_path, "w") as f:
+            f.write("STDOUT:\n" + stdout + "\n\nSTDERR:\n" + stderr)
+        raise RuntimeError(
+            f"[{cfg_label}] RUN {rng_run} exit={result.returncode}, log={log_path}"
+        )
+
+    # Szukamy „Average throughput: X Mb/s”
+    thr = None
+    for line in stdout.splitlines():
+        m = re.search(r"Average throughput:\s*([0-9.]+)\s*Mb/s", line)
+        if m:
+            thr = float(m.group(1))
+            break
+
+    if thr is None:
+        safe_label = cfg_label.replace(" ", "_")
+        log_path = os.path.join(OUTPUT_DIR, f"{safe_label}_rng{rng_run}_stdout.txt")
+        with open(log_path, "w") as f:
+            f.write(stdout)
+        raise RuntimeError(
+            f"[{cfg_label}] RUN {rng_run} brak throughputu, log={log_path}"
+        )
+
+    print(f"[{cfg_label}] RUN {rng_run}  Throughput = {thr:.3f} Mb/s")
+    return thr
+
+def main():
+    all_rows = []
+    cfg_labels = []
+    cfg_means = []
+
+    current_rng = RNG_START
+
+    for label, mlo_mode, num_links in CONFIGS:
+        print("\n====================================")
+        print(f"Konfiguracja: {label}")
+        print(f"  mloMode  = {mlo_mode}")
+        print(f"  numLinks = {num_links}")
+        print("====================================\n")
+
+        rng_values = list(range(current_rng, current_rng + RUNS))
+        current_rng += RUNS
+
+        throughputs = []
+
+        for rr in rng_values:
+            try:
+                thr = run_one_simulation(label, mlo_mode, num_links, rr)
+                throughputs.append((rr, thr))
+            except Exception as e:
+                print(f"[ERROR] {label} / RngRun={rr}: {e}")
+
+        if not throughputs:
+            print(f"[WARN] Brak wyników dla {label}, pomijam.")
+            continue
+
+        throughputs.sort(key=lambda x: x[0])
+        thr_vals = np.array([v for (_, v) in throughputs], dtype=float)
+        mean_thr = float(np.mean(thr_vals))
+
+        cfg_labels.append(label)
+        cfg_means.append(mean_thr)
+
+        print(f"\n>>> {label}: mean throughput = {mean_thr:.3f} Mb/s "
+              f"(runs={len(thr_vals)})\n")
+
+        for idx, (rr, thr) in enumerate(throughputs, start=1):
+            all_rows.append({
+                "config_label": label,
+                "mloMode": mlo_mode,
+                "numLinks": num_links,
+                "run_idx": idx,
+                "RngRun": rr,
+                "throughput_Mbps": thr,
+            })
+
+    if not cfg_means:
+        print("[ERROR] Nie udało się zebrać żadnych wyników.")
+        return
+
+    # CSV
+    with open(SUMMARY_CSV, "w", newline="") as f:
+        fieldnames = ["config_label", "mloMode", "numLinks",
+                      "run_idx", "RngRun", "throughput_Mbps"]
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        for row in all_rows:
+            w.writerow(row)
+
+    print(f"[OK] Zapisano pełne wyniki do {SUMMARY_CSV}")
+
+    # Wykres
+    cfg_means = np.array(cfg_means, dtype=float)
+    baseline = cfg_means[0]
+    rel = (cfg_means - baseline) / baseline * 100.0
+
+    x = np.arange(len(cfg_labels))
+    plt.figure(figsize=(7, 6))
+    bars = plt.bar(x, cfg_means)
+
+    plt.xticks(x, cfg_labels)
+    plt.ylabel("Throughput (Mbps)")
+    plt.ylim(0, cfg_means.max() * 1.25)
+    plt.title("Throughput vs. MLO mode / number of links")
+
+    for i, (b, r) in enumerate(zip(bars, rel)):
+        h = b.get_height()
+        if i == 0:
+            text = ""
+        else:
+            sign = "+" if r >= 0 else ""
+            text = f"{sign}{r:.1f}%"
+        if text:
+            plt.text(
+                b.get_x() + b.get_width() / 2.0,
+                h + cfg_means.max() * 0.03,
+                text,
+                ha="center",
+                va="bottom",
+                fontsize=10,
+            )
+
+    plt.tight_layout()
+    plt.savefig(PLOT_FILE, dpi=300)
+    plt.show()
+    print(f"[OK] Zapisano wykres: {PLOT_FILE}")
+
+if __name__ == "__main__":
+    main()
