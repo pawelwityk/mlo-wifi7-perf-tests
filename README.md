@@ -36,7 +36,7 @@ The performance analysis follows a structured, reproducible four-step pipeline:
 To run the simulations and analysis scripts, ensure you have the following dependencies installed:
 
 ### Network Simulator
-* **ns-3** (v3.40 or newer with Wi-Fi 7/802.11be support)
+* **ns-3** (v3.45)
 * C++17 compiler (GCC or Clang)
 * CMake
 
