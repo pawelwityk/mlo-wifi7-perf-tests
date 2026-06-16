@@ -21,7 +21,12 @@ Multi-Link Operation (MLO) is a flagship feature of Wi-Fi 7 (IEEE 802.11be) that
 
 The performance analysis follows a structured, reproducible four-step pipeline:
 
-[ ns-3 Simulation ] ──(Simulation Results)──> [ CSV File ] ──(Input Data)──> [ Python Scripts ] ──> [ Statistical Analysis & Plots ]
+```mermaid
+flowchart LR
+      A[ns-3 Simulation] -->|Simulation Results| B[CSV File]
+      B -->|Input Data| C[Python Scripts]
+      C --> D[Statistical Analysis & Plots]
+```
 
 
 1. **ns-3 Simulation:** The network scenario is executed within the network simulator, generating raw trace files.
