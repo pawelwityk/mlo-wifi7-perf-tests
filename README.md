@@ -49,24 +49,29 @@ Usage
 1. Running the Simulation
 Navigate to your ns-3 directory, link the scenario from this repository, and execute:
 
-Bash
+```bash
 ./ns3 run "mlo-wifi7-perf-tests --simulationTime=10 --numStations=5"
+```
+
 This will generate the raw result files in the output directory.
 
 2. Analyzing Results
 Run the local Python scripts to process the generated CSV files and produce statistical plots:
 
-Bash
+```bash
 python scripts/analyze_results.py --input data/simulation_results.csv --output charts/
-Sample Visualizations
+```
+
+#### Sample Visualizations
 The analytical scripts automatically output several types of plots into the charts/ directory:
 
-Throughput Stability: Time-series analysis of aggregated bandwidth across multiple links.
+* Throughput Stability: Time-series analysis of aggregated bandwidth across multiple links.
+* Latency CDF: Cumulative Distribution Function curves comparing MLO vs. Single-Link operation.
 
-Latency CDF: Cumulative Distribution Function curves comparing MLO vs. Single-Link operation.
+## Author
 
-Authors
 Paweł Wityk - Main Developer / Maintainer - github.com/pawelwityk
 
-License
+## License
+
 This project is licensed under the MIT License - see the LICENSE file for details.
